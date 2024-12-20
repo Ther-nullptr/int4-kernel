@@ -28,6 +28,11 @@ def flatten_last_dim_and_return_shape(x: torch.Tensor):
     x = x.view(-1, x.shape[-1])
     return x, shape_excl_last
 
+def flatten_first_dim_and_return_shape(x: torch.Tensor):
+    shape_excl_first = x.shape[1:]
+    x = x.view(x.shape[0], -1)
+    return x, shape_excl_first
+
 def matmul(A, B):
     assert A.shape[-1] % 32 == 0, "A.shape[-1]: {} must be multiplication of 32".format(A.shape[-1])
     A, A_shape_excl_last = flatten_last_dim_and_return_shape(A)
@@ -54,8 +59,8 @@ def sym_dequant_row_only(q, scale_row, bits=32):
 def sym_dequant_col_only(q, scale_col, bits=32):
     assert q.dtype == torch.int8
     assert scale_col.dtype == torch.float16
-    q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
-    return int4_kernel._CUDA.sym_dequant_col_only(q, scale_col, bits).view(*q_shape_excl_last, -1)
+    q, q_shape_excl_last = flatten_first_dim_and_return_shape(q)
+    return int4_kernel._CUDA.sym_dequant_col_only(q, scale_col.view(-1), bits).view(-1, *q_shape_excl_last)
 
 
 class PackedQuantizedTensor:

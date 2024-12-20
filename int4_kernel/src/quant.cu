@@ -75,18 +75,17 @@ sym_dequantize_col_only_i4_f16_kernel(const int8_t *__restrict__ q,
     return;
   }
 
-  Int4Storage storage;
-  memset(&storage, 0, sizeof(storage));
-  uint32_t id = col + rowSrc * kElementsPerVector * cols;
-  int32_t qval = q[id];
+  uint32_t id = col + rowSrc * cols;
+  uint32_t src_qval = q[id];
+  uint32_t qval = 0;
 
 #pragma unroll
   for (int i = 0; i < kElementsPerVector; ++i) {
     bool safe = (rowSrc * kElementsPerVector + i) < rowsDst;
     if (safe) {
       // load the 4bit value
-      // split bit: get the i-th 4bit value
-      qval = (qval >> (i * 4)) & 0xf;
+      qval = src_qval & 0xf;
+      src_qval >>= 4;
       x[col + (rowSrc * kElementsPerVector + i) * cols] = scale_col[col] * int_to_half(qval);
     }
   }
@@ -111,8 +110,6 @@ sym_dequantize_row_only_i4_f16_kernel(const int8_t *__restrict__ q,
     return;
   }
 
-  Int4Storage storage;
-  memset(&storage, 0, sizeof(storage));
   uint32_t id = colSrc + row * colsSrc;
   uint32_t src_qval = q[id];
   uint32_t qval = 0;
