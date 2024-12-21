@@ -51,16 +51,23 @@ def sym_dequant(q, scale_row, scale_col, bits=32):
     return int4_kernel._CUDA.sym_dequant(q, scale_row.view(-1), scale_col, bits).view(*q_shape_excl_last, -1)
 
 def sym_dequant_row_only(q, scale_row, bits=32):
-    assert q.dtype == torch.int8
+    assert q.dtype == torch.int8 or q.dtype == torch.uint8
     assert scale_row.dtype == torch.float16
     q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_row_only(q, scale_row.view(-1), bits).view(*q_shape_excl_last, -1)
 
 def sym_dequant_col_only(q, scale_col, bits=32):
-    assert q.dtype == torch.int8
+    assert q.dtype == torch.int8 or q.dtype == torch.uint8
     assert scale_col.dtype == torch.float16
     q, q_shape_excl_last = flatten_first_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_col_only(q, scale_col.view(-1), bits).view(-1, *q_shape_excl_last)
+
+def sym_dequantize_quantize(q_in, q_out, scale_row, scale_col, bits=32):
+    assert q_in.dtype == q_out.dtype == torch.int32
+    assert scale_row.dtype == scale_col.dtype == torch.float16
+    q_in, q_in_shape_excl_last = flatten_last_dim_and_return_shape(q_in)
+    q_out, q_out_shape_excl_last = flatten_last_dim_and_return_shape(q_out)
+    return int4_kernel._CUDA.sym_dequantize_quantize(q_in, q_out, scale_row.view(-1), scale_col, bits).view(*q_in_shape_excl_last, -1)
 
 
 class PackedQuantizedTensor:

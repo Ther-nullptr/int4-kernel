@@ -137,6 +137,28 @@ torch::Tensor sym_dequant_row_only(const torch::Tensor &q,
   return x;
 }
 
+torch::Tensor sym_dequantize_quantize(const torch::Tensor &q_in, const torch::Tensor &q_out,
+                                      const torch::Tensor &scale_row, const torch::Tensor &scale_col) {
+  torch::checkAllContiguous("sym_dequantize_quantize", {{q_in, "q_in", 0}, {q_out, "q_out", 1}, {scale_row, "scale_row", 2}, {scale_col, "scale_col", 3}});
+  torch::checkDeviceType("sym_dequantize_quantize", {q_in, q_out, scale_row, scale_col},
+                         at::DeviceType::CUDA);
+
+  torch::checkAllSameGPU("sym_dequantize_quantize", {{q_in, "q_in", 0}, {q_out, "q_out", 1}, {scale_row, "scale_row", 2}, {scale_col, "scale_col", 3}});
+
+  uint32_t rowsSrc = q_in.size(0);
+  uint32_t rowsDst = q_out.size(0);
+  uint32_t colsSrc = q_in.size(1);
+  uint32_t colsDst = q_out.size(1);
+
+  torch::checkSize("sym_dequantize_quantize", torch::TensorArg{scale_row, "scale_row", 2},
+                   0, rowsSrc);
+  torch::checkSize("sym_dequantize_quantize", torch::TensorArg{scale_col, "scale_col", 3},
+                   0, colsSrc);
+
+  sym_dequantize_quantize_host(q_in.data_ptr<int8_t>(), q_out.data_ptr<int8_t>(), (half *)scale_row.data_ptr(), (half *)scale_col.data_ptr(), rowsSrc, rowsDst, colsSrc, colsDst);
+
+  return q_out;
+}
 
 
 //====== pybind ======
@@ -200,4 +222,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "when bits equal 32: "
         "input x type is int32\n",
         py::arg("q"), py::arg("scale_row"), py::arg("bits"));
+
+  m.def("sym_dequantize_quantize", &sym_dequantize_quantize,
+        "input (q_in: torch.Tensor(M x N, INT8, CUDA), q_out: torch.Tensor(M x N, INT8, CUDA), scale_row: torch.Tensor(M x 1, FP16, CUDA), scale_col: torch.Tensor(1 x N, FP16, CUDA))"
+        "output: torch.Tensor(M x N, INT8, CUDA)\n"
+        "output = q_out"
+        "q_out = q_in * scale_row * scale_col"
+        "input q_in type is int8\n",
+        py::arg("q_in"), py::arg("q_out"), py::arg("scale_row"), py::arg("scale_col"));
 }

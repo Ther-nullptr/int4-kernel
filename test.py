@@ -31,4 +31,12 @@ if __name__ == '__main__':
   print(w_dequant_torch.shape)
   print(w_dequant_torch)
   
+  # # quantize dequantize test
+  # w = torch.randn((1024, 512), device='cuda', dtype=torch.float16)
+  # scale_row = torch.randn((1024,), device='cuda', dtype=torch.float16)
+  # scale_col = torch.randn((512,), device='cuda', dtype=torch.float16)
+  # w_quant = int4_kernel.sym_quant(w, scale_row)
+  # w_dequant = int4_kernel.sym_dequant_row_only(w_quant, scale_row)
+  # w_dequant_quant = int4_kernel.sym_quant(w_dequant, scale_col)
+  # print(w_dequant_quant.shape)
   

@@ -37,3 +37,14 @@ void sym_dequant_row_only_host(
     uint32_t colsDst,
     half *x
 );
+
+void sym_dequantize_quantize_host(
+    const int8_t *q_in, 
+    int8_t *q_out,
+    const half *scale_row, 
+    const half *scale_col, 
+    uint32_t rowsSrc, 
+    uint32_t rowsDst, 
+    uint32_t colsSrc, 
+    uint32_t colsDst
+);
