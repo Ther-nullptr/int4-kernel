@@ -269,7 +269,7 @@ namespace cutlass
 
 } // namespace cutlass
 
-using Int4Subbyte = cutlass::MySubbyteReference<cutlass::int4b_t, uint8_t>;
+using Int4Subbyte = cutlass::MySubbyteReference<cutlass::int4b_t, int8_t>;
 using Int4Storage = Int4Subbyte::Storage;
 constexpr const uint32_t kElementsPerVector =
     cutlass::sizeof_bits<Int4Storage>::value /

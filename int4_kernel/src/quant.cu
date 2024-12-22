@@ -1,8 +1,13 @@
 #include "quant.h"
+#include <stdio.h>
 
 template <typename T> __device__ __half int_to_half(T value) {
   return __int2half_rn(static_cast<int>(value));
 }
+
+#define SMEM_SIZE_1 16
+#define SMEM_SIZE_2 16
+#define SMEM_SIZE 32
 
 __global__ void sym_quantize_f16_i4_kernel(const half *__restrict__ x,
                                            const half *__restrict__ scale,
@@ -143,54 +148,51 @@ sym_dequantize_quantize_i4_f16_i4_kernel(const int8_t *__restrict__ q_in,
   uint32_t rowSrc = threadIdx.y + blockIdx.y * blockDim.y;
   uint32_t colSrc = threadIdx.x + blockIdx.x * blockDim.x;
 
-  __shared__ half buffer[64][64];
-
-  if (colSrc * kElementsPerVector >= colsDst || rowSrc * kElementsPerVector >= rowsDst) {
-    return;
-  }
+  __shared__ half buffer[SMEM_SIZE_1][SMEM_SIZE_2 + 1];
 
   // first, row-wise dequantize, and move to shared memory
   uint32_t id = colSrc + rowSrc * colsSrc;
   uint32_t src_qval = q_in[id];
-  uint32_t qval = 0;
+  int32_t qval = 0;
 
-#pragma unroll
+// #pragma unroll
   for (int i = 0; i < kElementsPerVector; ++i) {
-    bool safe = (colSrc * kElementsPerVector + i) < colsDst;
-    if (safe) {
-      // load the 4bit value
-      qval = src_qval & 0xf;
-      src_qval >>= 4;
-      buffer[rowSrc][colSrc * kElementsPerVector + i] = scale_row[rowSrc] * int_to_half(qval);
-    }
+    // load the 4bit value
+    qval = src_qval & 0xf;
+    src_qval >>= 4;
+    buffer[rowSrc % SMEM_SIZE_1][(colSrc * kElementsPerVector + i) % SMEM_SIZE_2] = scale_row[rowSrc] * int_to_half(qval);
   }
-
+  
   __syncthreads();
 
   // second, col-wise quantize
-  Int4Storage storage;
+  uint8_t storage;
   memset(&storage, 0, sizeof(storage));
 
-#pragma unroll
+  uint32_t rowSrc_2 = threadIdx.y % (blockDim.y / kElementsPerVector) + blockIdx.y * (blockDim.y / kElementsPerVector);
+  uint32_t colSrc_2 = threadIdx.x + ((threadIdx.y * kElementsPerVector) / blockDim.y) * blockDim.x + blockIdx.x * blockDim.x * kElementsPerVector;
+
+// #pragma unroll
   for (int i = 0; i < kElementsPerVector; ++i) {
-    bool safe = (rowSrc * kElementsPerVector + i) < rowsDst;
-    if (safe) {
-      half data = buffer[rowSrc * kElementsPerVector + i][colSrc];
-      int qval = clamp(__half2int_rn(data), qmin, qmax);
-      Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), i}.set(qval);
-    }
+    half data = buffer[(rowSrc_2 * kElementsPerVector + i) % SMEM_SIZE_1][colSrc_2 % SMEM_SIZE_2];
+    data = __hdiv(data, scale_col[colSrc_2]);
+    int qval = clamp(__half2int_rn(data), qmin, qmax);
+    // Int4Subbyte{reinterpret_cast<cutlass::int4b_t *>(&storage), i}.set(qval);
+    storage |= (qval & 0xf) << (i * 4);
   }
 
-  // third, transpose
-  // original position: colSrc + rowSrc * colsDst
-  // transposed position: rowSrc + colSrc * rowsDst
-  q_out[rowSrc + colSrc * rowsDst] = storage;
+  // uint32_t rowSrc_t = threadIdx.x + (threadIdx.y * kElementsPerVector) / blockDim.y * blockDim.x + blockIdx.x * blockDim.x * kElementsPerVector;
+  // uint32_t colSrc_t = threadIdx.y % (blockDim.y / kElementsPerVector) + blockIdx.y * (blockDim.y / kElementsPerVector);
+
+  uint32_t id_transpose = rowSrc_2 + colSrc_2 * rowsSrc;
+  q_out[id_transpose] = storage;
 }
 
 void sym_dequantize_quantize_host(const int8_t *q_in, int8_t *q_out,
                                   const half *scale_row, const half *scale_col, 
                                   uint32_t rowsSrc, uint32_t rowsDst, uint32_t colsSrc, uint32_t colsDst) {
-  dim3 block{std::min<uint32_t>(colsDst, 32), std::min<uint32_t>(rowsDst, 32)};
-  dim3 grid{cdiv(colsDst, block.x), cdiv(rowsDst, block.y)};
+  dim3 block{SMEM_SIZE_1 / kElementsPerVector, SMEM_SIZE_2};
+  dim3 grid{cdiv(colsSrc, block.x), cdiv(rowsDst, block.y)};
+  // print the size of block and grid
   sym_dequantize_quantize_i4_f16_i4_kernel<<<grid, block>>>(q_in, q_out, scale_row, scale_col, rowsSrc, rowsDst, colsSrc, colsDst);
 }
