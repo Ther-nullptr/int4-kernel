@@ -3,14 +3,14 @@
 
 void matmul_host(const Int4Storage *A, const Int4Storage *B, uint32_t M,
                  uint32_t N, uint32_t K, int32_t *C) {
-  using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<128, 128, 128>;
-  using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 128>;
+  using ShapeMMAThreadBlock = cutlass::gemm::GemmShape<256, 128, 128>;
+  using ShapeMMAWarp = cutlass::gemm::GemmShape<128, 64, 128>;
   using InstructionShape = cutlass::gemm::GemmShape<16, 8, 64>;
   using EpilogueOutputOp = cutlass::epilogue::thread::LinearCombinationClamp<
       int32_t, 128 / cutlass::sizeof_bits<int32_t>::value, int32_t, float>;
   using ThreadblockSwizzle =
       cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
-  constexpr int NumStages = 6;
+  constexpr int NumStages = 3;
 
   using Gemm = cutlass::gemm::device::Gemm<
       cutlass::int4b_t,               // ElementA

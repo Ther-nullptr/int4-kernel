@@ -4,7 +4,7 @@ import int4_kernel._CUDA
 __all__ = [ 
   "matmul", #int-4 matmul
   "sym_quant", "sym_dequant", "PackedQuantizedTensor", # Quantization
-  "sym_dequant_row_only", "sym_dequant_col_only", # Quantization
+  "sym_dequant_row_only", "sym_dequant_col_only", "pack_i4" # Quantization
 ]
 
 class ShapeHandler:
@@ -40,34 +40,45 @@ def matmul(A, B):
     return int4_kernel._CUDA.matmul(A, B).view(*A_shape_excl_last, *B_shape_excl_last)
 
 def sym_quant(x, scale):
-    assert x.dtype == scale.dtype == torch.float16
+    assert x.dtype == scale.dtype == torch.bfloat16
     x, x_shape_excl_last = flatten_last_dim_and_return_shape(x)
     return int4_kernel._CUDA.sym_quant(x, scale.view(-1)).view(*x_shape_excl_last, -1)
 
 def sym_dequant(q, scale_row, scale_col, bits=32):
     assert q.dtype == torch.int32
-    assert scale_row.dtype == scale_col.dtype == torch.float16
+    assert scale_row.dtype == scale_col.dtype == torch.bfloat16
     q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant(q, scale_row.view(-1), scale_col, bits).view(*q_shape_excl_last, -1)
 
 def sym_dequant_row_only(q, scale_row, bits=32):
     assert q.dtype == torch.int8
-    assert scale_row.dtype == torch.float16
+    assert scale_row.dtype == torch.bfloat16
     q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_row_only(q, scale_row.view(-1), bits).view(*q_shape_excl_last, -1)
 
 def sym_dequant_col_only(q, scale_col, bits=32):
     assert q.dtype == torch.int8
-    assert scale_col.dtype == torch.float16
+    assert scale_col.dtype == torch.bfloat16
     q, q_shape_excl_last = flatten_first_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_col_only(q, scale_col.view(-1), bits).view(-1, *q_shape_excl_last)
 
 def sym_dequantize_quantize(q_in, scale_row, scale_col, bits=32):
     assert q_in.dtype == torch.int8
-    assert scale_row.dtype == scale_col.dtype == torch.float16
+    assert scale_row.dtype == scale_col.dtype == torch.bfloat16
     q_in, q_in_shape_excl_last = flatten_last_dim_and_return_shape(q_in)
     return int4_kernel._CUDA.sym_dequantize_quantize(q_in, scale_row, scale_col) #.view(*q_in_shape_excl_last, -1)
 
+def pack_i4(q, bits=4):
+    assert torch.is_signed(q), 'The tensor to be packed should be signed int'
+    maxq = torch.tensor(2**(bits-1)-1)
+    minq = torch.tensor(-maxq - 1)
+    assert torch.all(torch.logical_and(q >= minq, q <= maxq)), f'The tensor max value is {torch.max(q)} and min value is {torch.min(q)}'
+
+    # q_i8 = two_compl(q.to(dtype=torch.int8), 4).to(torch.uint8)
+    q_i8 = q.to(dtype=torch.int8)
+    q_i8 = torch.where(q_i8 < 0, 2 ** bits + q_i8, q_i8).to(torch.uint8)
+    q_i4 = q_i8[:, 0::2] | (q_i8[:, 1::2] << 4)
+    return q_i4
 
 class PackedQuantizedTensor:
     def __init__(self, 
