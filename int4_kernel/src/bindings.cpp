@@ -34,7 +34,7 @@ torch::Tensor sym_quant(const torch::Tensor &x, const torch::Tensor &scale) {
   auto q = torch::empty({rows, colsDst},
                         torch::dtype(torch::kInt8).device(x.device()));
 
-  sym_quant_host((half *)x.data_ptr(), (half *)scale.data_ptr(), rows, colsSrc,
+  sym_quant_host((half_bf16 *)x.data_ptr(), (half_bf16 *)scale.data_ptr(), rows, colsSrc,
                  colsDst, q.data_ptr<Int4Storage>());
 
   return q;
@@ -62,13 +62,13 @@ torch::Tensor sym_dequant(const torch::Tensor &q,
                    0, cols);
 
   auto x =
-      torch::empty(q.sizes(), torch::dtype(torch::kHalf).device(q.device()));
+      torch::empty(q.sizes(), torch::dtype(torch::kBFloat16).device(q.device()));
 
   switch (bits) {
   case 32:
-    sym_dequant_host(q.data_ptr<int32_t>(), (half *)scale_row.data_ptr(),
-                     (half *)scale_col.data_ptr(), rows, cols,
-                     (half *)x.data_ptr());
+    sym_dequant_host(q.data_ptr<int32_t>(), (half_bf16 *)scale_row.data_ptr(),
+                     (half_bf16 *)scale_col.data_ptr(), rows, cols,
+                     (half_bf16 *)x.data_ptr());
     break;
   default:
     TORCH_CHECK(false, "Unsupported data type")
@@ -93,12 +93,12 @@ torch::Tensor sym_dequant_col_only(const torch::Tensor &q,
                    0, cols);
 
   auto x =
-      torch::empty({rowsDst, cols}, torch::dtype(torch::kHalf).device(q.device()));
+      torch::empty({rowsDst, cols}, torch::dtype(torch::kBFloat16).device(q.device()));
 
   switch (bits) {
   case 32:
-    sym_dequant_col_only_host(q.data_ptr<int8_t>(), (half *)scale_col.data_ptr(),
-                              rowsSrc, rowsDst, cols, (half *)x.data_ptr());
+    sym_dequant_col_only_host(q.data_ptr<int8_t>(), (half_bf16 *)scale_col.data_ptr(),
+                              rowsSrc, rowsDst, cols, (half_bf16 *)x.data_ptr());
     break;
   default:
     TORCH_CHECK(false, "Unsupported data type")
@@ -123,12 +123,12 @@ torch::Tensor sym_dequant_row_only(const torch::Tensor &q,
                    0, rows);
 
   auto x =
-      torch::empty({rows, colsDst}, torch::dtype(torch::kHalf).device(q.device()));
+      torch::empty({rows, colsDst}, torch::dtype(torch::kBFloat16).device(q.device()));
 
   switch (bits) {
   case 32:
-    sym_dequant_row_only_host(q.data_ptr<int8_t>(), (half *)scale_row.data_ptr(),
-                              rows, colsSrc, colsDst, (half *)x.data_ptr());
+    sym_dequant_row_only_host(q.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(),
+                              rows, colsSrc, colsDst, (half_bf16 *)x.data_ptr());
     break;
   default:
     TORCH_CHECK(false, "Unsupported data type")
@@ -151,7 +151,7 @@ torch::Tensor sym_dequantize_quantize(const torch::Tensor &q_in,
 
   auto q_out = torch::zeros({colsDst, rowsSrc}, torch::dtype(torch::kInt8).device(q_in.device()));
 
-  sym_dequantize_quantize_host(q_in.data_ptr<int8_t>(), q_out.data_ptr<int8_t>(), (half *)scale_row.data_ptr(), (half *)scale_col.data_ptr(), rowsSrc, rowsDst, colsSrc, colsDst);
+  sym_dequantize_quantize_host(q_in.data_ptr<int8_t>(), q_out.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(), (half_bf16 *)scale_col.data_ptr(), rowsSrc, rowsDst, colsSrc, colsDst);
 
   return q_out;
 }
@@ -171,8 +171,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("A"), py::arg("B"));
 
   m.def("sym_quant", &sym_quant,
-        "input: (src: torch.Tensor(M x N, FP16, CUDA), scale: "
-        "torch.Tensor(M x 1, FP16, CUDA))"
+        "input: (src: torch.Tensor(M x N, BF16, CUDA), scale: "
+        "torch.Tensor(M x 1, BF16, CUDA))"
         "bits: int\n"
         "output: torch.Tensor(M x ceil(N / 2), UINT8, CUDA)\n"
         "output = int4Packing(int4Rounding(source / scale)\n",
@@ -180,47 +180,47 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
   m.def("sym_dequant", &sym_dequant,
         "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, "
-        "FP16), scale_col: torch.Tensor(1 x N, FP16)"
+        "BF16), scale_col: torch.Tensor(1 x N, BF16)"
         "bits: int\n"
-        "output: torch.Tensor(M x N, FP16)\n"
+        "output: torch.Tensor(M x N, BF16)\n"
         "output = x * scale_row * scale_col"
         "when bits equal 8: "
         "input x type is int8\n"
         "when bits equal 16: "
-        "input x type is FP16\n"
+        "input x type is BF16\n"
         "when bits equal 32: "
         "input x type is int32\n",
         py::arg("q"), py::arg("scale_row"), py::arg("scale_col"),
         py::arg("bits"));
 
   m.def("sym_dequant_col_only", &sym_dequant_col_only,
-        "input (x: torch.Tensor(M x N), scale_col: torch.Tensor(1 x N, FP16)"
+        "input (x: torch.Tensor(M x N), scale_col: torch.Tensor(1 x N, BF16)"
         "bits: int\n"
-        "output: torch.Tensor(M x N, FP16)\n"
+        "output: torch.Tensor(M x N, BF16)\n"
         "output = x * scale_col"
         "when bits equal 8: "
         "input x type is int8\n"
         "when bits equal 16: "
-        "input x type is FP16\n"
+        "input x type is BF16\n"
         "when bits equal 32: "
         "input x type is int32\n",
         py::arg("q"), py::arg("scale_col"), py::arg("bits"));
   
   m.def("sym_dequant_row_only", &sym_dequant_row_only,
-        "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, FP16)"
+        "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, BF16)"
         "bits: int\n"
-        "output: torch.Tensor(M x N, FP16)\n"
+        "output: torch.Tensor(M x N, BF16)\n"
         "output = x * scale_row"
         "when bits equal 8: "
         "input x type is int8\n"
         "when bits equal 16: "
-        "input x type is FP16\n"
+        "input x type is BF16\n"
         "when bits equal 32: "
         "input x type is int32\n",
         py::arg("q"), py::arg("scale_row"), py::arg("bits"));
 
   m.def("sym_dequantize_quantize", &sym_dequantize_quantize,
-        "input (q_in: torch.Tensor(M x N, INT8), scale_row: torch.Tensor(M x 1, FP16), scale_col: torch.Tensor(1 x N, FP16)"
+        "input (q_in: torch.Tensor(M x N, INT8), scale_row: torch.Tensor(M x 1, BF16), scale_col: torch.Tensor(1 x N, BF16)"
         "output: torch.Tensor(M x N, INT8)\n"
         "output = int4Packing(int4Rounding(int4Unpacking(q_in) * scale_row * scale_col)\n",
         py::arg("q_in"), py::arg("scale_row"), py::arg("scale_col"));
