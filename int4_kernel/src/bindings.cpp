@@ -20,6 +20,22 @@ torch::Tensor matmul(const torch::Tensor &A, const torch::Tensor &B) {
   return C;
 }
 
+torch::Tensor matmul_int8(const torch::Tensor &A, const torch::Tensor &B) {
+  torch::checkAllContiguous("matmul_int8", {{A, "A", 0}, {B, "B", 1}});
+  torch::checkDeviceType("matmul_int8", {A, B}, at::DeviceType::CUDA);
+
+  torch::checkAllSameGPU("matmul_int8", {{A, "A", 0}, {B, "B", 1}});
+  uint32_t M = A.size(0);
+  uint32_t N = B.size(0);
+  uint32_t K = A.size(1);
+  auto C = torch::empty({M, N}, torch::dtype(torch::kInt32).device(A.device()));
+
+  matmul_host_int8(A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), M, N, K,
+                   C.data_ptr<int32_t>());
+
+  return C;
+}
+
 torch::Tensor sym_quant(const torch::Tensor &x, const torch::Tensor &scale) {
   torch::checkAllContiguous("sym_quant", {{x, "x", 0}, {scale, "scale", 1}});
   torch::checkDeviceType("sym_quant", {x, scale}, at::DeviceType::CUDA);
@@ -137,6 +153,30 @@ torch::Tensor sym_dequant_row_only(const torch::Tensor &q,
   return x;
 }
 
+torch::Tensor sym_dequant_row_only_int8(const torch::Tensor &q,
+                                        const torch::Tensor &scale_row) {
+  torch::checkAllContiguous("sym_dequant_row_only_int8", {{q, "q", 0}, {scale_row, "scale_row", 1}});
+  torch::checkDeviceType("sym_dequant_row_only_int8", {q, scale_row},
+                         at::DeviceType::CUDA);
+
+  torch::checkAllSameGPU("sym_dequant_row_only_int8", {{q, "q", 0}, {scale_row, "scale_row", 1}});
+
+  uint32_t rows = q.size(0);
+  uint32_t colsSrc = q.size(1);
+  uint32_t colsDst = colsSrc * kElementsPerVector;
+
+  torch::checkSize("sym_dequant_row_only_int8", torch::TensorArg{scale_row, "scale_row", 1},
+                   0, rows);
+
+  auto x =
+      torch::empty({rows, colsDst}, torch::dtype(torch::kBFloat16).device(q.device()));
+
+  sym_dequant_row_only_int8_host(q.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(),
+                                 rows, colsSrc, colsDst, (half_bf16 *)x.data_ptr());
+
+  return x;
+}
+
 torch::Tensor sym_dequantize_quantize(const torch::Tensor &q_in,
                                       const torch::Tensor &scale_row, const torch::Tensor &scale_col) {
   torch::checkAllContiguous("sym_dequantize_quantize", {{q_in, "q_in", 0}, {scale_row, "scale_row", 1}, {scale_col, "scale_col", 2}});
@@ -168,6 +208,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "UINT8, CUDA))\n"
         "output: torch.Tensor(M x N, INT32, CUDA)\n"
         "output = int4Unpacking(A) @ int4Unpacking(B)^T",
+        py::arg("A"), py::arg("B"));
+  
+  m.def("matmul_int8", &matmul_int8,
+        "input: (A: torch.Tensor(M x K, INT8, CUDA), B: torch.Tensor(N x K, "
+        "INT8, CUDA))\n"
+        "output: torch.Tensor(M x N, INT32, CUDA)\n"
+        "output = A @ B^T",
         py::arg("A"), py::arg("B"));
 
   m.def("sym_quant", &sym_quant,

@@ -21,16 +21,16 @@ void matmul_host(const Int4Storage *A, const Int4Storage *B, uint32_t M,
       cutlass::layout::RowMajor,      // LayoutOutput
       int32_t,                        // ElementAccumulator
       cutlass::arch::OpClassTensorOp, // tag indicating Tensor Cores
-      cutlass::arch::Sm80, // tag indicating target GPU compute architecture  //
-                           // TODO: This is just for compiling on my laptop
-                           // temporarily. Should be higher when doing
-                           // benchmarking.
-      ShapeMMAThreadBlock, // Threadblock-level tile size
-      ShapeMMAWarp,        // Warp-level tile size
-      InstructionShape,    // TensorCore instruction shape
-      EpilogueOutputOp,    // Epilogue output operator
-      ThreadblockSwizzle,  // Threadblock swizzle
-      NumStages            // Number of stages
+      cutlass::arch::Sm80 // tag indicating target GPU compute architecture  //
+    //                        // TODO: This is just for compiling on my laptop
+    //                        // temporarily. Should be higher when doing
+    //                        // benchmarking.
+    //   ShapeMMAThreadBlock, // Threadblock-level tile size
+    //   ShapeMMAWarp,        // Warp-level tile size
+    //   InstructionShape,    // TensorCore instruction shape
+    //   EpilogueOutputOp,    // Epilogue output operator
+    //   ThreadblockSwizzle,  // Threadblock swizzle
+    //   NumStages            // Number of stages
       >;
 
   Gemm gemmOp;
@@ -46,6 +46,37 @@ void matmul_host(const Int4Storage *A, const Int4Storage *B, uint32_t M,
                                      {C, N},
                                      {1, 0}};
 
+  auto status = gemmOp(arguments);
+  ensure(status == cutlass::Status::kSuccess, cutlassGetStatusString(status));
+}
+
+void matmul_host_int8(
+    const int8_t *A, const int8_t *B, uint32_t M, uint32_t N, uint32_t K,
+    int32_t *C) {
+  using Gemm = cutlass::gemm::device::Gemm<
+      int8_t, 
+      cutlass::layout::RowMajor, 
+      int8_t, 
+      cutlass::layout::ColumnMajor,
+      int32_t, 
+      cutlass::layout::RowMajor, 
+      int32_t,
+      cutlass::arch::OpClassTensorOp, 
+      cutlass::arch::Sm80
+  >;
+
+  Gemm gemmOp;
+
+  using GemmCoord = cutlass::gemm::GemmCoord;
+
+  typename Gemm::Arguments arguments{{static_cast<GemmCoord::Index>(M),
+                                      static_cast<GemmCoord::Index>(N),
+                                      static_cast<GemmCoord::Index>(K)},
+                                     {A, K},
+                                     {B, K},
+                                     {C, N},
+                                     {C, N},
+                                     {1, 0}};
   auto status = gemmOp(arguments);
   ensure(status == cutlass::Status::kSuccess, cutlassGetStatusString(status));
 }
