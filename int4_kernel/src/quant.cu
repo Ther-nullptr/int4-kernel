@@ -55,7 +55,7 @@ __global__ void sym_quantize_f16_i8_kernel(const half_bf16 *__restrict__ x,
   }
 
   half_bf16 xElement = __hdiv(x[col + row * cols], scale[row]);
-  int qval = clamp(__bfloat162int_rn(xElement), qmin, qmax);
+  int qval = clamp(__bfloat162int_rn(xElement), -128, 127);
   q[col + row * cols] = qval;
 }
 
@@ -246,4 +246,40 @@ void sym_dequantize_quantize_host(const int8_t *q_in, int8_t *q_out,
   dim3 grid{cdiv(colsSrc, block.x), cdiv(rowsDst, block.y)};
   // print the size of block and grid
   sym_dequantize_quantize_i4_f16_i4_kernel<<<grid, block>>>(q_in, q_out, scale_row, scale_col, rowsSrc, rowsDst, colsSrc, colsDst);
+}
+
+
+__global__ void
+int4_to_int8_kernel(const int8_t *__restrict__ q_in,
+                    uint32_t rows, uint32_t colsSrc,
+                    uint32_t colsDst, int8_t *__restrict__ q_out) {
+  uint32_t row = threadIdx.y + blockIdx.y * blockDim.y;
+  uint32_t colSrc = threadIdx.x + blockIdx.x * blockDim.x;
+
+  if (row >= rows || colSrc * kElementsPerVector >= colsDst) {
+    return;
+  }
+
+  uint32_t id = colSrc + row * colsSrc;
+  int32_t src_qval = q_in[id];
+  int32_t qval = 0;
+
+#pragma unroll
+  for (int i = 0; i < kElementsPerVector; ++i) {
+    bool safe = (colSrc * kElementsPerVector + i) < colsDst;
+    if (safe) {
+      // load the 4bit value
+      qval = src_qval & 0xf;
+      qval = (qval & 0x8) ? (qval | 0xfffffff0) : qval;
+      src_qval >>= 4;
+      q_out[colSrc * kElementsPerVector + i + row * colsDst] = qval;
+    }
+  }
+}
+
+void int4_to_int8_host(const int8_t *q_in, uint32_t rows, uint32_t colsSrc,
+                       uint32_t colsDst, int8_t *q_out) {
+  dim3 block{std::min<uint32_t>(colsSrc, 16), std::min<uint32_t>(rows, 16)};
+  dim3 grid{cdiv(colsSrc, block.x), cdiv(rows, block.y)};
+  int4_to_int8_kernel<<<grid, block>>>(q_in, rows, colsSrc, colsDst, q_out);
 }

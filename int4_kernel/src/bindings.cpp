@@ -30,8 +30,7 @@ torch::Tensor matmul_int8(const torch::Tensor &A, const torch::Tensor &B) {
   uint32_t K = A.size(1);
   auto C = torch::empty({M, N}, torch::dtype(torch::kInt32).device(A.device()));
 
-  matmul_host_int8(A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), M, N, K,
-                   C.data_ptr<int32_t>());
+  matmul_host_int8(A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), M, N, K, C.data_ptr<int32_t>());
 
   return C;
 }
@@ -52,6 +51,24 @@ torch::Tensor sym_quant(const torch::Tensor &x, const torch::Tensor &scale) {
 
   sym_quant_host((half_bf16 *)x.data_ptr(), (half_bf16 *)scale.data_ptr(), rows, colsSrc,
                  colsDst, q.data_ptr<Int4Storage>());
+
+  return q;
+}
+
+torch::Tensor sym_quant_int8(const torch::Tensor &x, const torch::Tensor &scale) {
+  torch::checkAllContiguous("sym_quant_int8", {{x, "x", 0}, {scale, "scale", 1}});
+  torch::checkDeviceType("sym_quant_int8", {x, scale}, at::DeviceType::CUDA);
+
+  torch::checkSameGPU("sym_quant_int8", {x, "x", 0}, {scale, "scale", 1});
+  torch::checkSize("sym_quant_int8", torch::TensorArg{scale, "scale", 1}, 0,
+                   x.size(0));
+  uint32_t rows = x.size(0);
+  uint32_t cols = x.size(1);
+
+  auto q = torch::empty({rows, cols},
+                        torch::dtype(torch::kInt8).device(x.device()));
+
+  sym_quant_int8_host((half_bf16 *)x.data_ptr(), (half_bf16 *)scale.data_ptr(), rows, cols, q.data_ptr<int8_t>());
 
   return q;
 }
@@ -162,17 +179,15 @@ torch::Tensor sym_dequant_row_only_int8(const torch::Tensor &q,
   torch::checkAllSameGPU("sym_dequant_row_only_int8", {{q, "q", 0}, {scale_row, "scale_row", 1}});
 
   uint32_t rows = q.size(0);
-  uint32_t colsSrc = q.size(1);
-  uint32_t colsDst = colsSrc * kElementsPerVector;
+  uint32_t cols = q.size(1);
 
-  torch::checkSize("sym_dequant_row_only_int8", torch::TensorArg{scale_row, "scale_row", 1},
-                   0, rows);
+  torch::checkSize("sym_dequant_row_only_int8", torch::TensorArg{scale_row, "scale_row", 1}, 0, rows);
 
   auto x =
-      torch::empty({rows, colsDst}, torch::dtype(torch::kBFloat16).device(q.device()));
+      torch::empty({rows, cols}, torch::dtype(torch::kBFloat16).device(q.device()));
 
   sym_dequant_row_only_int8_host(q.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(),
-                                 rows, colsSrc, colsDst, (half_bf16 *)x.data_ptr());
+                                 rows, cols, (half_bf16 *)x.data_ptr());
 
   return x;
 }
@@ -192,6 +207,23 @@ torch::Tensor sym_dequantize_quantize(const torch::Tensor &q_in,
   auto q_out = torch::zeros({colsDst, rowsSrc}, torch::dtype(torch::kInt8).device(q_in.device()));
 
   sym_dequantize_quantize_host(q_in.data_ptr<int8_t>(), q_out.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(), (half_bf16 *)scale_col.data_ptr(), rowsSrc, rowsDst, colsSrc, colsDst);
+
+  return q_out;
+}
+
+torch::Tensor int4_to_int8(const torch::Tensor &q) {
+  torch::checkAllContiguous("int4_to_int8", {{q, "q", 0}});
+  torch::checkDeviceType("int4_to_int8", {q}, at::DeviceType::CUDA);
+
+  torch::checkAllSameGPU("int4_to_int8", {{q, "q", 0}});
+
+  uint32_t rows = q.size(0);
+  uint32_t colsSrc = q.size(1);
+  uint32_t colsDst = q.size(1) * kElementsPerVector;
+
+  auto q_out = torch::zeros({rows, colsDst}, torch::dtype(torch::kInt8).device(q.device()));
+
+  int4_to_int8_host(q.data_ptr<int8_t>(), rows, colsSrc, colsDst, q_out.data_ptr<int8_t>());
 
   return q_out;
 }
@@ -222,6 +254,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "torch.Tensor(M x 1, BF16, CUDA))"
         "bits: int\n"
         "output: torch.Tensor(M x ceil(N / 2), UINT8, CUDA)\n"
+        "output = int4Packing(int4Rounding(source / scale)\n",
+        py::arg("x"), py::arg("scale"));
+
+  m.def("sym_quant_int8", &sym_quant_int8,
+        "input: (src: torch.Tensor(M x N, BF16, CUDA), scale: "
+        "torch.Tensor(M x 1, BF16, CUDA))"
+        "output: torch.Tensor(M x ceil(N / 2), INT8, CUDA)\n"
         "output = int4Packing(int4Rounding(source / scale)\n",
         py::arg("x"), py::arg("scale"));
 
@@ -265,10 +304,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "when bits equal 32: "
         "input x type is int32\n",
         py::arg("q"), py::arg("scale_row"), py::arg("bits"));
+    
+  m.def("sym_dequant_row_only_int8", &sym_dequant_row_only_int8,
+        "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, BF16)"
+        "output: torch.Tensor(M x N, BF16)\n"
+        "output = x * scale_row",
+        py::arg("q"), py::arg("scale_row"));
 
   m.def("sym_dequantize_quantize", &sym_dequantize_quantize,
         "input (q_in: torch.Tensor(M x N, INT8), scale_row: torch.Tensor(M x 1, BF16), scale_col: torch.Tensor(1 x N, BF16)"
         "output: torch.Tensor(M x N, INT8)\n"
         "output = int4Packing(int4Rounding(int4Unpacking(q_in) * scale_row * scale_col)\n",
         py::arg("q_in"), py::arg("scale_row"), py::arg("scale_col"));
+
+  m.def("int4_to_int8", &int4_to_int8,
+        "input: (q: torch.Tensor(M x N, UINT8, CUDA))\n"
+        "output: torch.Tensor(M x N, INT8, CUDA)\n"
+        "output = int4Unpacking(q)",
+        py::arg("q"));
 }

@@ -40,6 +40,14 @@ void sym_dequant_row_only_host(
     half_bf16 *x
 );
 
+void sym_dequant_row_only_int8_host(
+    const int8_t *q,
+    const half_bf16 *scale_row,
+    uint32_t rows,
+    uint32_t cols,
+    half_bf16 *x
+);
+
 void sym_dequantize_quantize_host(
     const int8_t *q_in, 
     int8_t *q_out,
@@ -55,16 +63,14 @@ void sym_quant_int8_host(
     const half_bf16 *x,
     const half_bf16 *scale,
     uint32_t rows,
-    uint32_t colsSrc,
-    uint32_t colsDst,
+    uint32_t cols,
     int8_t *q
 );
 
-void sym_dequant_row_only_int8_host(
+void int4_to_int8_host(
     const int8_t *q,
-    const half_bf16 *scale_row,
     uint32_t rows,
     uint32_t colsSrc,
     uint32_t colsDst,
-    half_bf16 *x
+    int8_t *q_out
 );

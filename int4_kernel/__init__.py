@@ -5,6 +5,7 @@ __all__ = [
   "matmul", #int-4 matmul
   "sym_quant", "sym_dequant", "PackedQuantizedTensor", # Quantization
   "sym_dequant_row_only", "sym_dequant_col_only", "pack_i4" # Quantization
+  "sym_dequantize_quantize", "matmul_int8" # Quantization
 ]
 
 class ShapeHandler:
@@ -39,10 +40,21 @@ def matmul(A, B):
     B, B_shape_excl_last = flatten_last_dim_and_return_shape(B)
     return int4_kernel._CUDA.matmul(A, B).view(*A_shape_excl_last, *B_shape_excl_last)
 
+def matmul_int8(A, B):
+    assert A.shape[-1] % 32 == 0, "A.shape[-1]: {} must be multiplication of 32".format(A.shape[-1])
+    A, A_shape_excl_last = flatten_last_dim_and_return_shape(A)
+    B, B_shape_excl_last = flatten_last_dim_and_return_shape(B)
+    return int4_kernel._CUDA.matmul_int8(A, B).view(*A_shape_excl_last, *B_shape_excl_last)
+
 def sym_quant(x, scale):
     assert x.dtype == scale.dtype == torch.bfloat16
     x, x_shape_excl_last = flatten_last_dim_and_return_shape(x)
     return int4_kernel._CUDA.sym_quant(x, scale.view(-1)).view(*x_shape_excl_last, -1)
+
+def sym_quant_int8(x, scale):
+    assert x.dtype == scale.dtype == torch.bfloat16
+    x, x_shape_excl_last = flatten_last_dim_and_return_shape(x)
+    return int4_kernel._CUDA.sym_quant_int8(x, scale.view(-1)).view(*x_shape_excl_last, -1)
 
 def sym_dequant(q, scale_row, scale_col, bits=32):
     assert q.dtype == torch.int32
@@ -56,6 +68,12 @@ def sym_dequant_row_only(q, scale_row, bits=32):
     q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_row_only(q, scale_row.view(-1), bits).view(*q_shape_excl_last, -1)
 
+def sym_dequant_row_only_int8(q, scale_row, bits=32):
+    assert q.dtype == torch.int8
+    assert scale_row.dtype == torch.bfloat16
+    q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
+    return int4_kernel._CUDA.sym_dequant_row_only_int8(q, scale_row.view(-1)).view(*q_shape_excl_last, -1)
+
 def sym_dequant_col_only(q, scale_col, bits=32):
     assert q.dtype == torch.int8
     assert scale_col.dtype == torch.bfloat16
@@ -67,6 +85,11 @@ def sym_dequantize_quantize(q_in, scale_row, scale_col, bits=32):
     assert scale_row.dtype == scale_col.dtype == torch.bfloat16
     q_in, q_in_shape_excl_last = flatten_last_dim_and_return_shape(q_in)
     return int4_kernel._CUDA.sym_dequantize_quantize(q_in, scale_row, scale_col) #.view(*q_in_shape_excl_last, -1)
+
+def int4_to_int8(q):
+    assert q.dtype == torch.int8
+    q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
+    return int4_kernel._CUDA.int4_to_int8(q).view(*q_shape_excl_last, -1)
 
 def pack_i4(q, bits=4):
     assert torch.is_signed(q), 'The tensor to be packed should be signed int'
