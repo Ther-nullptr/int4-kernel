@@ -9,6 +9,43 @@ template <typename T> __device__ half_bf16 int_to_bfloat16(T value) {
 #define SMEM_SIZE_2 16
 #define SMEM_SIZE 32
 
+
+__global__ void sym_quantize_f16_i2_kernel(const half_bf16 *__restrict__ x,
+                                           const half_bf16 *__restrict__ scale,
+                                           uint32_t rows, uint32_t colsSrc,
+                                           uint32_t colsDst,
+                                           int8_t *__restrict__ q) {
+  uint32_t row = threadIdx.y + blockIdx.y * blockDim.y;
+  uint32_t colDst = threadIdx.x + blockIdx.x * blockDim.x;
+  uint32_t kElementsPerVector = 4;
+  if (row >= rows || colDst * kElementsPerVector >= colsSrc) {
+    return;
+  }
+  int8_t storage;
+  memset(&storage, 0, sizeof(storage));
+  uint32_t id = colDst * kElementsPerVector + row * colsSrc;
+#pragma unroll
+  for (int i = 0; i < kElementsPerVector; ++i) {
+    bool safe = (colDst * kElementsPerVector + i) < colsSrc;
+    if (safe) {
+      half_bf16 data = __hdiv(x[id + i], scale[row]);
+      int qval = clamp(__bfloat162int_rn(data), -2, 1);
+      storage |= ((qval & 0x3) << (i * 2));
+    }
+  }
+
+  q[colDst + row * colsDst] = storage;
+}
+
+
+void sym_quant_int2_host(const half_bf16 *x, const half_bf16 *scale, uint32_t rows,
+                         uint32_t colsSrc, uint32_t colsDst, int8_t *q) {
+  dim3 block{std::min<uint32_t>(colsDst, 32), std::min<uint32_t>(rows, 16)};
+  dim3 grid{cdiv(colsDst, block.x), cdiv(rows, block.y)};
+  sym_quantize_f16_i2_kernel<<<grid, block>>>(x, scale, rows, colsSrc, colsDst, q);
+}
+
+
 __global__ void sym_quantize_f16_i4_kernel(const half_bf16 *__restrict__ x,
                                            const half_bf16 *__restrict__ scale,
                                            uint32_t rows, uint32_t colsSrc,
@@ -161,6 +198,47 @@ void sym_dequant_row_only_host(const int8_t *q, const half_bf16 *scale_row, uint
   dim3 grid{cdiv(colsSrc, block.x), cdiv(rows, block.y)};
   sym_dequantize_row_only_i4_f16_kernel<<<grid, block>>>(q, scale_row, rows, colsSrc, colsDst, x);
 }
+
+
+__global__ void
+sym_dequantize_row_only_i2_f16_kernel(const int8_t *__restrict__ q,
+                                      const half_bf16 *__restrict__ scale_row,
+                                      uint32_t rows, uint32_t colsSrc,
+                                      uint32_t colsDst, half_bf16 *__restrict__ x) {
+  uint32_t row = threadIdx.y + blockIdx.y * blockDim.y;
+  uint32_t colSrc = threadIdx.x + blockIdx.x * blockDim.x;
+
+  int kElementsPerVector = 4;
+
+  if (row >= rows || colSrc * kElementsPerVector >= colsDst) {
+    return;
+  }
+
+  uint32_t id = colSrc + row * colsSrc;
+  int32_t src_qval = q[id];
+  int32_t qval = 0;
+
+#pragma unroll
+  for (int i = 0; i < kElementsPerVector; ++i) {
+    bool safe = (colSrc * kElementsPerVector + i) < colsDst;
+    if (safe) {
+      // load the 4bit value
+      qval = src_qval & 0x3;
+      qval = (qval & 0x2) ? (qval | 0xfffffffc) : qval;
+      src_qval >>= 2;
+      x[colSrc * kElementsPerVector + i + row * colsDst] = scale_row[row] * int_to_bfloat16(qval);
+    }
+  }
+}
+
+
+void sym_dequant_row_only_int2_host(const int8_t *q, const half_bf16 *scale_row, uint32_t rows,
+                                    uint32_t colsSrc, uint32_t colsDst, half_bf16 *x) {
+  dim3 block{std::min<uint32_t>(colsSrc, 16), std::min<uint32_t>(rows, 16)};
+  dim3 grid{cdiv(colsSrc, block.x), cdiv(rows, block.y)};
+  sym_dequantize_row_only_i2_f16_kernel<<<grid, block>>>(q, scale_row, rows, colsSrc, colsDst, x);
+}
+
 
 __global__ void sym_dequantize_row_only_i8_f16_kernel(const int8_t *__restrict__ q,
                                                       const half_bf16 *__restrict__ scale_row,

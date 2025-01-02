@@ -56,6 +56,11 @@ def sym_quant_int8(x, scale):
     x, x_shape_excl_last = flatten_last_dim_and_return_shape(x)
     return int4_kernel._CUDA.sym_quant_int8(x, scale.view(-1)).view(*x_shape_excl_last, -1)
 
+def sym_quant_int2(x, scale):
+    assert x.dtype == scale.dtype == torch.bfloat16
+    x, x_shape_excl_last = flatten_last_dim_and_return_shape(x)
+    return int4_kernel._CUDA.sym_quant_int2(x, scale.view(-1)).view(*x_shape_excl_last, -1)
+
 def sym_dequant(q, scale_row, scale_col, bits=32):
     assert q.dtype == torch.int32
     assert scale_row.dtype == scale_col.dtype == torch.bfloat16
@@ -73,6 +78,12 @@ def sym_dequant_row_only_int8(q, scale_row, bits=32):
     assert scale_row.dtype == torch.bfloat16
     q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
     return int4_kernel._CUDA.sym_dequant_row_only_int8(q, scale_row.view(-1)).view(*q_shape_excl_last, -1)
+
+def sym_dequant_row_only_int2(q, scale_row, bits=32):
+    assert q.dtype == torch.int8
+    assert scale_row.dtype == torch.bfloat16
+    q, q_shape_excl_last = flatten_last_dim_and_return_shape(q)
+    return int4_kernel._CUDA.sym_dequant_row_only_int2(q, scale_row.view(-1)).view(*q_shape_excl_last, -1)
 
 def sym_dequant_col_only(q, scale_col, bits=32):
     assert q.dtype == torch.int8

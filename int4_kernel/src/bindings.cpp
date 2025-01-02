@@ -60,8 +60,7 @@ torch::Tensor sym_quant_int8(const torch::Tensor &x, const torch::Tensor &scale)
   torch::checkDeviceType("sym_quant_int8", {x, scale}, at::DeviceType::CUDA);
 
   torch::checkSameGPU("sym_quant_int8", {x, "x", 0}, {scale, "scale", 1});
-  torch::checkSize("sym_quant_int8", torch::TensorArg{scale, "scale", 1}, 0,
-                   x.size(0));
+  torch::checkSize("sym_quant_int8", torch::TensorArg{scale, "scale", 1}, 0, x.size(0));
   uint32_t rows = x.size(0);
   uint32_t cols = x.size(1);
 
@@ -69,6 +68,25 @@ torch::Tensor sym_quant_int8(const torch::Tensor &x, const torch::Tensor &scale)
                         torch::dtype(torch::kInt8).device(x.device()));
 
   sym_quant_int8_host((half_bf16 *)x.data_ptr(), (half_bf16 *)scale.data_ptr(), rows, cols, q.data_ptr<int8_t>());
+
+  return q;
+}
+
+torch::Tensor sym_quant_int2(const torch::Tensor &x, const torch::Tensor &scale) {
+  torch::checkAllContiguous("sym_quant_int2", {{x, "x", 0}, {scale, "scale", 1}});
+  torch::checkDeviceType("sym_quant_int2", {x, scale}, at::DeviceType::CUDA);
+
+  torch::checkSameGPU("sym_quant_int2", {x, "x", 0}, {scale, "scale", 1});
+
+  uint32_t kElementsPerVector = 4;
+  uint32_t rows = x.size(0);
+  uint32_t colsSrc = x.size(1);
+  uint32_t colsDst = cdiv(colsSrc, kElementsPerVector);
+
+  auto q = torch::empty({rows, colsDst},
+                        torch::dtype(torch::kInt8).device(x.device()));
+  
+  sym_quant_int2_host((half_bf16 *)x.data_ptr(), (half_bf16 *)scale.data_ptr(), rows, colsSrc, colsDst, (int8_t*)q.data_ptr());
 
   return q;
 }
@@ -192,6 +210,32 @@ torch::Tensor sym_dequant_row_only_int8(const torch::Tensor &q,
   return x;
 }
 
+torch::Tensor sym_dequant_row_only_int2(const torch::Tensor &q,
+                                        const torch::Tensor &scale_row) {
+  torch::checkAllContiguous("sym_dequant_row_only_int2", {{q, "q", 0}, {scale_row, "scale_row", 1}});
+  torch::checkDeviceType("sym_dequant_row_only_int2", {q, scale_row},
+                         at::DeviceType::CUDA);
+
+  torch::checkAllSameGPU("sym_dequant_row_only_int2", {{q, "q", 0}, {scale_row, "scale_row", 1}});
+
+  int kElementsPerVector = 4;
+
+  uint32_t rows = q.size(0);
+  uint32_t colsSrc = q.size(1);
+  uint32_t colsDst = colsSrc * kElementsPerVector;
+
+  torch::checkSize("sym_dequant_row_only_int2", torch::TensorArg{scale_row, "scale_row", 1}, 0, rows);
+
+  auto x =
+      torch::empty({rows, colsDst}, torch::dtype(torch::kBFloat16).device(q.device()));
+
+  sym_dequant_row_only_int2_host(q.data_ptr<int8_t>(), (half_bf16 *)scale_row.data_ptr(),
+                                 rows, colsSrc, colsDst, (half_bf16 *)x.data_ptr());
+
+  return x;
+}
+
+
 torch::Tensor sym_dequantize_quantize(const torch::Tensor &q_in,
                                       const torch::Tensor &scale_row, const torch::Tensor &scale_col) {
   torch::checkAllContiguous("sym_dequantize_quantize", {{q_in, "q_in", 0}, {scale_row, "scale_row", 1}, {scale_col, "scale_col", 2}});
@@ -264,6 +308,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "output = int4Packing(int4Rounding(source / scale)\n",
         py::arg("x"), py::arg("scale"));
 
+  m.def("sym_quant_int2", &sym_quant_int2,
+        "input: (src: torch.Tensor(M x N, BF16, CUDA), scale: "
+        "torch.Tensor(M x 1, BF16, CUDA))"
+        "output: torch.Tensor(M x ceil(N / 2), INT8, CUDA)\n"
+        "output = int4Packing(int4Rounding(source / scale)\n",
+        py::arg("x"), py::arg("scale"));
+
   m.def("sym_dequant", &sym_dequant,
         "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, "
         "BF16), scale_col: torch.Tensor(1 x N, BF16)"
@@ -306,6 +357,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("q"), py::arg("scale_row"), py::arg("bits"));
     
   m.def("sym_dequant_row_only_int8", &sym_dequant_row_only_int8,
+        "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, BF16)"
+        "output: torch.Tensor(M x N, BF16)\n"
+        "output = x * scale_row",
+        py::arg("q"), py::arg("scale_row"));
+  
+  m.def("sym_dequant_row_only_int2", &sym_dequant_row_only_int2,
         "input (x: torch.Tensor(M x N), scale_row: torch.Tensor(M x 1, BF16)"
         "output: torch.Tensor(M x N, BF16)\n"
         "output = x * scale_row",
